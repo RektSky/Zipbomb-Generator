@@ -37,3 +37,51 @@ protection layer to protect your software from being cracked.
 >  - WinRAR
 >  - 7-zip, but the file name faker works
 >  - `unzip` Linux Command
+
+
+
+## Use cases
+This is obviously for obfuscation and educational purposes only, and I'm dead serious, using this
+to do bad stuff is actually very stupid, and you shouldn't be doing it under any condition.
+
+Here are some use cases:
+1. Learn how the code works
+2. Protect your Java programs
+
+## Usage
+1. Clone this repository, and `mvn clean package install`
+2. Add this to `pom.xml`:
+```xml
+<dependency>
+    <groupId>ml.rektsky</groupId>
+    <artifactId>zipbomb-generator-java</artifactId>
+    <version>1.0-SNAPSHOT</version>
+</dependency> 
+```
+3. Example Usage:
+```java
+
+public class Main {
+    public static void main(String[] args) {
+        OutputStream outputStream = Files.newOutputStream(Paths.get("zipbomb.zip"));
+        // Create an instance with custom configuration
+        ZipBombGenerator zipBombGenerator = new ZipBombGenerator.Builder(index -> "T-" + index + ".class", (short) (Short.MAX_VALUE - 1), Integer.MAX_VALUE - 2)
+                .fakeEntryName("FakedEntryName")
+                .build();
+
+        Map<ZipEntry, byte[]> files = new HashMap<>();
+        // Add a file to the zip file
+        // You can also read all entries from a zip file using ZipInputStream
+        FileInputStream fileInputStream = new FileInputStream("Main.class");
+        files.put(new ZipEntry("Main.class"), IOUtils.readNBytes(fileInputStream, Integer.MAX_VALUE));
+
+        // Zipbomb it, it may take a while to run
+        byte[] bytes = zipBombGenerator.create(files);
+
+        // Write the zipbomb output to the file
+        outputStream.write(bytes);
+        outputStream.close();
+    }
+    
+}
+```
